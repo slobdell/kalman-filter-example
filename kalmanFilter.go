@@ -303,7 +303,7 @@ func (k *KalmanFilterFusedPositionAccelerometer) GetPredictedVelocityThisAxis() 
 
 func NewKalmanFilterFusedPositionAccelerometer(initialPosition float64,
 	positionStandardDeviation float64,
-	accelerometerEastStandardDeviation float64,
+	accelerometerStandardDeviation float64,
 	currentTimestampSeconds float64) *KalmanFilterFusedPositionAccelerometer {
 
 	currentState := basicMatrix.NewMatrix(2, 1)
@@ -317,8 +317,8 @@ func NewKalmanFilterFusedPositionAccelerometer(initialPosition float64,
 	P := basicMatrix.NewIdentityMatrix(2, 2)
 
 	Q := basicMatrix.NewMatrix(2, 2)
-	Q.Put(0, 0, accelerometerEastStandardDeviation*accelerometerEastStandardDeviation)
-	Q.Put(1, 1, accelerometerEastStandardDeviation*accelerometerEastStandardDeviation)
+	Q.Put(0, 0, accelerometerStandardDeviation*accelerometerStandardDeviation)
+	Q.Put(1, 1, accelerometerStandardDeviation*accelerometerStandardDeviation)
 
 	R := basicMatrix.NewMatrix(2, 2)
 	R.Put(0, 0, float64(positionStandardDeviation*positionStandardDeviation))
