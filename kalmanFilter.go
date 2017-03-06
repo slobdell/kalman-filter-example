@@ -135,11 +135,14 @@ type sensorData struct {
 	Pitch         float32 `json:"pitch"`
 	Yaw           float32 `json:"yaw"`
 	Roll          float32 `json:"roll"`
-	RelForwardAcc float32 `json:"rel_forward_acc"`
-	RelUpAcc      float32 `json:"rel_up_acc"`
 	AbsNorthAcc   float32 `json:"abs_north_acc"`
 	AbsEastAcc    float32 `json:"abs_east_acc"`
 	AbsUpAcc      float32 `json:"abs_up_acc"`
+	VelNorth      float64 `json:"vel_north"`
+	VelEast       float64 `json:"vel_east"`
+	VelDown       float64 `json:"vel_down"`
+	VelError      float64 `json:"vel_error"`
+	AltitudeError float64 `json:"altitude_error"`
 }
 
 type outputPacket struct {
@@ -148,6 +151,8 @@ type outputPacket struct {
 	PredictedLon float64 `json:"predicted_lon"`
 	PredictedAlt float64 `json:"predicted_alt"`
 	ResultantMPH float64 `json:"resultant_mph"`
+	GPSLat       float64 `json:"gps_lat"`
+	GPSLon       float64 `json:"gps_lon"`
 }
 
 type sensorDataCollection []sensorData
@@ -226,6 +231,7 @@ func writeJsonSerializableToFile(jsonEntity interface{}, filename string) {
 	  t     ]
 */
 type KalmanFilterFusedPositionAccelerometer struct {
+	I                            *basicMatrix.Matrix // identity matrix used in some calculations
 	H                            *basicMatrix.Matrix // transformation matrix for input data
 	P                            *basicMatrix.Matrix // initial guess for covariance
 	Q                            *basicMatrix.Matrix // process (accelerometer) error variance
@@ -253,10 +259,16 @@ func (k *KalmanFilterFusedPositionAccelerometer) Predict(accelerationThisAxis, t
 	k.currentStateTimestampSeconds = timestampNow
 }
 
-func (k *KalmanFilterFusedPositionAccelerometer) Update(position, velocityThisAxis float64) {
+func (k *KalmanFilterFusedPositionAccelerometer) Update(position float64, velocityThisAxis float64, positionError *float64, velocityError float64) {
 
-	k.z.Put(0, 0, position)
-	k.z.Put(1, 0, velocityThisAxis)
+	k.z.Put(0, 0, float64(position))
+	k.z.Put(1, 0, float64(velocityThisAxis))
+
+	if positionError != nil {
+		k.R.Put(0, 0, *positionError**positionError)
+	} else {
+	}
+	k.R.Put(1, 1, velocityError*velocityError)
 
 	y := k.z.Subtract(k.currentState)
 	s := k.P.Add(k.R)
@@ -269,12 +281,11 @@ func (k *KalmanFilterFusedPositionAccelerometer) Update(position, velocityThisAx
 
 	k.currentState = k.currentState.Add(K.MultipliedBy(y))
 
-	k.P = (basicMatrix.NewIdentityMatrix(2, 2).Subtract(K)).MultipliedBy(k.P)
+	k.P = (k.I.Subtract(K)).MultipliedBy(k.P)
 
 	/*
 		above is equivalent to:
 			updatedP := k.P.Subtract(K.MultipliedBy(k.P))
-
 		which would explain some confusion on the internets
 	*/
 }
@@ -294,27 +305,29 @@ func (k *KalmanFilterFusedPositionAccelerometer) recreateStateTransitionMatrix(d
 }
 
 func (k *KalmanFilterFusedPositionAccelerometer) GetPredictedPosition() float64 {
-	return k.currentState.Get(0, 0)
+	return (k.currentState.Get(0, 0))
 }
 
 func (k *KalmanFilterFusedPositionAccelerometer) GetPredictedVelocityThisAxis() float64 {
-	return k.currentState.Get(1, 0)
+	return (k.currentState.Get(1, 0))
 }
 
 func NewKalmanFilterFusedPositionAccelerometer(initialPosition float64,
+	initialVelocity float64, // TODO unused still
 	positionStandardDeviation float64,
 	accelerometerStandardDeviation float64,
 	currentTimestampSeconds float64) *KalmanFilterFusedPositionAccelerometer {
 
 	currentState := basicMatrix.NewMatrix(2, 1)
 
-	currentState.Put(0, 0, initialPosition)
-	currentState.Put(1, 0, 0.0)
+	currentState.Put(0, 0, float64(initialPosition))
+	currentState.Put(1, 0, float64(initialVelocity))
 
 	u := basicMatrix.NewMatrix(1, 1)
 	z := basicMatrix.NewMatrix(2, 1)
 	H := basicMatrix.NewIdentityMatrix(2, 2)
 	P := basicMatrix.NewIdentityMatrix(2, 2)
+	I := basicMatrix.NewIdentityMatrix(2, 2)
 
 	Q := basicMatrix.NewMatrix(2, 2)
 	Q.Put(0, 0, accelerometerStandardDeviation*accelerometerStandardDeviation)
@@ -328,6 +341,7 @@ func NewKalmanFilterFusedPositionAccelerometer(initialPosition float64,
 	A := basicMatrix.NewMatrix(2, 2)
 
 	return &KalmanFilterFusedPositionAccelerometer{
+		I:                            I,
 		A:                            A,
 		B:                            B,
 		z:                            z,
@@ -343,7 +357,7 @@ func NewKalmanFilterFusedPositionAccelerometer(initialPosition float64,
 
 func main() {
 	var collection sensorDataCollection
-	readFileAsJson("taco_bell_trip.json", &collection)
+	readFileAsJson("pos_final.json", &collection)
 
 	initialSensorData := collection[0]
 
@@ -357,26 +371,26 @@ func main() {
 
 	longitudeEastKalmanFilter := NewKalmanFilterFusedPositionAccelerometer(
 		LongitudeToMeters(initialSensorData.GpsLon),
+		initialSensorData.VelEast,
 		latLonStandardDeviation,
 		accelerometerEastStandardDeviation,
 		initialSensorData.Timestamp,
 	)
 	latitudeNorthKalmanFilter := NewKalmanFilterFusedPositionAccelerometer(
 		LatitudeToMeters(initialSensorData.GpsLat),
+		initialSensorData.VelNorth,
 		latLonStandardDeviation,
 		accelerometerNorthStandardDeviation,
 		initialSensorData.Timestamp,
 	)
 	altitudeUpKalmanFilter := NewKalmanFilterFusedPositionAccelerometer(
 		initialSensorData.GpsAlt,
+		initialSensorData.VelDown*-1.0,
 		altitudeStandardDeviation,
 		accelerometerUpStandardDeviation,
 		initialSensorData.Timestamp,
 	)
 
-	previousLon := initialSensorData.GpsLon
-	previousLat := initialSensorData.GpsLat
-	previousAlt := initialSensorData.GpsAlt
 	outputs := make(outputCollection, 0)
 
 	for i := 1; i < len(collection); i++ {
@@ -396,32 +410,33 @@ func main() {
 		)
 
 		if data.GpsLat != 0.0 {
-			vEast := float64(
-				LongitudeToMeters(data.GpsLon) - LongitudeToMeters(previousLon),
-			)
+
+			var defaultPositionErr *float64 = nil
+			vEast := data.VelEast
 			longitudeAsMeters := LongitudeToMeters(data.GpsLon)
 			longitudeEastKalmanFilter.Update(
 				longitudeAsMeters,
 				vEast,
+				defaultPositionErr,
+				data.VelError,
 			)
-			previousLon = data.GpsLon
 
-			vNorth := float64(
-				LatitudeToMeters(data.GpsLat) - LatitudeToMeters(previousLat),
-			)
+			vNorth := data.VelNorth
 			latitudeAsMeters := LatitudeToMeters(data.GpsLat)
 			latitudeNorthKalmanFilter.Update(
 				latitudeAsMeters,
 				vNorth,
+				defaultPositionErr,
+				data.VelError,
 			)
-			previousLat = data.GpsLat
 
-			vUp := data.GpsAlt - previousAlt
+			vUp := data.VelDown * -1.0
 			altitudeUpKalmanFilter.Update(
 				data.GpsAlt,
 				vUp,
+				&data.AltitudeError,
+				data.VelError,
 			)
-			previousAlt = data.GpsAlt
 		}
 		predictedLonMeters := longitudeEastKalmanFilter.GetPredictedPosition()
 		predictedLatMeters := latitudeNorthKalmanFilter.GetPredictedPosition()
@@ -449,6 +464,8 @@ func main() {
 				PredictedLon: predictedLon,
 				PredictedAlt: predictedAlt,
 				ResultantMPH: 2.23694 * resultantV,
+				GPSLat:       data.GpsLat,
+				GPSLon:       data.GpsLon,
 			},
 		)
 	}
