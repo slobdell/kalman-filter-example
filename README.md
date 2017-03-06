@@ -3,7 +3,6 @@ This is as straightforward of an example as possible of sensor fusion between a 
 To use:
 
 ```
-tar -xzvf taco_bell_data.tar.gz
 go run kalmanFilter.go
 ```
 
